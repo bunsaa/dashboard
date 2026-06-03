@@ -57,6 +57,9 @@ Route::prefix('{current_team}')
             Route::get('/billing-non-bpjs/excel', [DownloadReportController::class, 'exportBillingNonBpjs'])->name('billing-non-bpjs.excel');
             Route::get('/kunjungan-dokter', [DownloadReportController::class, 'kunjunganDokter'])->name('kunjungan-dokter');
             Route::get('/kunjungan-dokter/excel', [DownloadReportController::class, 'exportKunjunganDokter'])->name('kunjungan-dokter.excel');
+            Route::get('/kunjungan-pasien', [DownloadReportController::class, 'kunjunganPasien'])->name('kunjungan-pasien');
+            Route::get('/kunjungan-pasien/excel', [DownloadReportController::class, 'exportKunjunganPasien'])->name('kunjungan-pasien.excel');
+            Route::get('/kunjungan-pasien/payslip', [DownloadReportController::class, 'exportPayslipSore'])->name('kunjungan-pasien.payslip');
         });
 
         // Monitoring

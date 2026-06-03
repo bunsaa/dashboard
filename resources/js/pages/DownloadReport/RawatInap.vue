@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Head, router, usePage } from '@inertiajs/vue3';
-import { AlertCircle, ChevronLeft, ChevronRight, Download, X } from 'lucide-vue-next';
+import { AlertCircle, ChevronLeft, ChevronRight, Download, Eye, X } from 'lucide-vue-next';
 import { computed, ref, watch } from 'vue';
 import downloadReportRoutes from '@/routes/download-report';
 import rawatInapRoutes from '@/routes/download-report/rawat-inap';
@@ -117,6 +117,11 @@ const paginated  = computed(() =>
 function prevPage() { if (currentPage.value > 1) currentPage.value--; }
 function nextPage() { if (currentPage.value < totalPages.value) currentPage.value++; }
 
+// ── Modal detail per-ruangan ───────────────────────────────────────────────
+const selectedRuangan = ref<PoliEntry | null>(null);
+function openDetail(row: PoliEntry) { selectedRuangan.value = row; }
+function closeDetail() { selectedRuangan.value = null; }
+
 // ── URL Excel ──────────────────────────────────────────────────────────────
 const excelAllUrl = computed(() => {
     if (!currentTeam.value) return '#';
@@ -232,19 +237,18 @@ function triggerDownload(url: string) { window.location.href = url; }
                             <tr>
                                 <th class="w-12 px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No</th>
                                 <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Nama Ruangan</th>
-                                <th
-                                    v-for="y in props.years"
-                                    :key="y"
-                                    class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300"
-                                >
-                                    Jml Pasien {{ y }}
+                                <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">
+                                    Jml Pasien {{ props.fromYear }}
                                 </th>
-                                <th class="w-14 px-4 py-3 text-center font-semibold text-gray-700 dark:text-gray-300">Excel</th>
+                                <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">
+                                    Jml Pasien {{ props.tahun }}
+                                </th>
+                                <th class="w-20 px-4 py-3 text-center font-semibold text-gray-700 dark:text-gray-300">Aksi</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
                             <tr v-if="!filteredRekap.length">
-                                <td :colspan="3 + props.years.length" class="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
+                                <td colspan="5" class="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
                                     {{ error ? 'Tidak ada data — koneksi ke database TARAKAN gagal.' : 'Tidak ada data.' }}
                                 </td>
                             </tr>
@@ -257,21 +261,29 @@ function triggerDownload(url: string) { window.location.href = url; }
                                     {{ (currentPage - 1) * PAGE_SIZE + idx + 1 }}
                                 </td>
                                 <td class="px-4 py-2.5 font-medium text-gray-900 dark:text-gray-100">{{ row.NamaPoli }}</td>
-                                <td
-                                    v-for="y in props.years"
-                                    :key="y"
-                                    class="px-4 py-2.5 text-right tabular-nums text-gray-700 dark:text-gray-300"
-                                >
-                                    {{ (row[`year_${y}`] as number ?? 0).toLocaleString('id-ID') }}
+                                <td class="px-4 py-2.5 text-right tabular-nums text-gray-700 dark:text-gray-300">
+                                    {{ (row[`year_${props.fromYear}`] as number ?? 0).toLocaleString('id-ID') }}
+                                </td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-gray-700 dark:text-gray-300">
+                                    {{ (row[`year_${props.tahun}`] as number ?? 0).toLocaleString('id-ID') }}
                                 </td>
                                 <td class="px-4 py-2.5 text-center">
-                                    <button
-                                        :title="`Download Excel — ${row.NamaPoli}`"
-                                        class="inline-flex h-7 w-7 items-center justify-center rounded text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-900/20"
-                                        @click="triggerDownload(ruanganExcelUrl(row.NamaPoli))"
-                                    >
-                                        <Download :size="14" />
-                                    </button>
+                                    <div class="inline-flex items-center gap-1">
+                                        <button
+                                            :title="`Lihat detail — ${row.NamaPoli}`"
+                                            class="inline-flex h-7 w-7 items-center justify-center rounded text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                                            @click="openDetail(row)"
+                                        >
+                                            <Eye :size="14" />
+                                        </button>
+                                        <button
+                                            :title="`Download Excel — ${row.NamaPoli}`"
+                                            class="inline-flex h-7 w-7 items-center justify-center rounded text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-900/20"
+                                            @click="triggerDownload(ruanganExcelUrl(row.NamaPoli))"
+                                        >
+                                            <Download :size="14" />
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         </tbody>
@@ -321,4 +333,62 @@ function triggerDownload(url: string) { window.location.href = url; }
         </div>
 
     </div>
+
+    <!-- Modal Detail Per-Ruangan -->
+    <Teleport to="body">
+        <div
+            v-if="selectedRuangan"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            @click.self="closeDetail"
+        >
+            <div class="w-full max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-800">
+                <!-- Modal header -->
+                <div class="flex items-start justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-700">
+                    <div>
+                        <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Detail Kunjungan Rawat Inap</h3>
+                        <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ selectedRuangan.NamaPoli }}</p>
+                    </div>
+                    <button
+                        class="ml-4 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                        @click="closeDetail"
+                    >
+                        <X :size="16" />
+                    </button>
+                </div>
+                <!-- Modal body -->
+                <div class="overflow-auto max-h-[60vh]">
+                    <table class="min-w-full divide-y divide-gray-100 text-sm dark:divide-gray-700">
+                        <thead class="sticky top-0 bg-gray-50 dark:bg-gray-700/50">
+                            <tr>
+                                <th class="px-5 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300">Tahun</th>
+                                <th class="px-5 py-2.5 text-right font-semibold text-gray-600 dark:text-gray-300">Jumlah Pasien</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                            <tr
+                                v-for="y in props.years"
+                                :key="y"
+                                class="hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                            >
+                                <td class="px-5 py-2.5 font-medium text-gray-900 dark:text-gray-100">{{ y }}</td>
+                                <td class="px-5 py-2.5 text-right tabular-nums text-gray-700 dark:text-gray-300">
+                                    {{ (selectedRuangan[`year_${y}`] as number ?? 0).toLocaleString('id-ID') }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- Modal footer -->
+                <div class="border-t border-gray-100 px-5 py-3 dark:border-gray-700">
+                    <button
+                        class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                        @click="triggerDownload(ruanganExcelUrl(selectedRuangan.NamaPoli))"
+                    >
+                        <Download :size="12" />
+                        Download Excel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </Teleport>
 </template>

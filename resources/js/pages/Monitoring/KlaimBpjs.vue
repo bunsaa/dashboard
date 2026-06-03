@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head, router, usePage, usePoll } from '@inertiajs/vue3';
+import { Deferred, Head, router, usePage, usePoll } from '@inertiajs/vue3';
 import { AlertCircle, AlertOctagonIcon, BadgeCheck, BadgeDollarSign, Calendar, ChevronLeft, ChevronRight, FileText, Search, X } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import monitoringRoutes from '@/routes/monitoring';
@@ -17,9 +17,7 @@ defineOptions({
     }),
 });
 
-const props = defineProps<{
-    bulan: string;
-    q: string;
+type KlaimData = {
     cards: {
         total_klaim: number;
         total_diajukan: number;
@@ -51,6 +49,12 @@ const props = defineProps<{
         last_page: number;
     };
     error: string | null;
+};
+
+const props = defineProps<{
+    bulan: string;
+    q: string;
+    data?: KlaimData | null;
 }>();
 
 const page = usePage();
@@ -104,7 +108,6 @@ watch(() => props.q, (val) => {
     if ((val ?? '') !== searchInput.value) {
         syncing = true;
         searchInput.value = val ?? '';
-        // Reset flag after this tick's watchers run
         setTimeout(() => { syncing = false; }, 0);
     }
 });
@@ -118,7 +121,7 @@ watch(searchInput, (val) => {
         router.get(
             monitoringRoutes.klaimBpjs(currentTeam.value.slug).url,
             { bulan: props.bulan, page: 1, ...(val ? { q: val } : {}) },
-            { only: ['items', 'pagination'] },
+            { only: ['data'] },
         );
     }, 400);
 });
@@ -129,13 +132,13 @@ function goToPage(pg: number) {
     router.get(
         monitoringRoutes.klaimBpjs(currentTeam.value.slug).url,
         { bulan: props.bulan, page: pg, ...(searchInput.value ? { q: searchInput.value } : {}) },
-        { only: ['items', 'pagination'] },
+        { only: ['data'] },
     );
 }
 
 const pageNumbers = computed((): (number | '...')[] => {
-    const total = props.pagination.last_page;
-    const cur = props.pagination.current_page;
+    const total = props.data?.pagination.last_page ?? 1;
+    const cur = props.data?.pagination.current_page ?? 1;
     if (total <= 7) {
         return Array.from({ length: total }, (_, i) => i + 1);
     }
@@ -246,239 +249,295 @@ function formatRupiah(value: number): string {
             </div>
         </div>
 
-        <!-- Error alert -->
-        <div
-            v-if="props.error"
-            class="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
-        >
-            <AlertCircle :size="18" class="mt-0.5 shrink-0" />
-            <p>{{ props.error }}</p>
-        </div>
-
-        <!-- Cards -->
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-
-            <!-- Card 1: Total klaim -->
-            <div class="rounded-xl border border-blue-100 bg-white p-5 shadow-sm dark:border-blue-900/30 dark:bg-gray-800">
-                <div class="flex items-start justify-between">
-                    <div>
-                        <p class="text-sm text-gray-500 dark:text-gray-400">Total Klaim</p>
-                        <p class="mt-1 text-3xl font-bold text-blue-600 dark:text-blue-400">
-                            {{ cards.total_klaim.toLocaleString('id-ID') }}
-                        </p>
-                    </div>
-                    <div class="rounded-lg bg-blue-50 p-2.5 dark:bg-blue-900/20">
-                        <FileText :size="22" class="text-blue-500" />
+        <Deferred data="data">
+            <!-- ── Skeleton while loading ── -->
+            <template #fallback>
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <div
+                        v-for="i in 4"
+                        :key="i"
+                        class="animate-pulse rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800"
+                    >
+                        <div class="flex items-start justify-between">
+                            <div class="space-y-2">
+                                <div class="h-4 w-28 rounded bg-gray-200 dark:bg-gray-700" />
+                                <div class="h-8 w-32 rounded bg-gray-200 dark:bg-gray-700" />
+                            </div>
+                            <div class="h-10 w-10 rounded-lg bg-gray-200 dark:bg-gray-700" />
+                        </div>
+                        <div class="mt-4 h-3 w-48 rounded bg-gray-200 dark:bg-gray-700" />
                     </div>
                 </div>
-                <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">Jumlah SEP bulan {{ bulanLabel }}</p>
-            </div>
-
-            <!-- Card 2: Total diajukan -->
-            <div class="rounded-xl border border-indigo-100 bg-white p-5 shadow-sm dark:border-indigo-900/30 dark:bg-gray-800">
-                <div class="flex items-start justify-between">
-                    <div>
-                        <p class="text-sm text-gray-500 dark:text-gray-400">Total Diajukan</p>
-                        <p class="mt-1 text-2xl font-bold leading-tight text-indigo-600 dark:text-indigo-400">
-                            {{ formatRupiahKompak(cards.total_diajukan) }}
-                        </p>
+                <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                    <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+                        <div class="h-8 w-72 animate-pulse rounded-lg bg-gray-200 dark:bg-gray-700" />
                     </div>
-                    <div class="rounded-lg bg-indigo-50 p-2.5 dark:bg-indigo-900/20">
-                        <BadgeDollarSign :size="22" class="text-indigo-500" />
+                    <div class="overflow-auto max-h-[60svh]">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+                            <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700/50">
+                                <tr>
+                                    <th class="w-10 px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No. SEP</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No. RM</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Nama Pasien</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Tgl. Verifikasi</th>
+                                    <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Biaya Diajukan</th>
+                                    <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Biaya Disetujui</th>
+                                    <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Selisih</th>
+                                </tr>
+                            </thead>
+                            <tbody class="animate-pulse divide-y divide-gray-200 dark:divide-gray-700">
+                                <tr v-for="i in 8" :key="i">
+                                    <td class="px-4 py-3"><div class="h-4 w-6 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-4 py-3"><div class="h-4 w-32 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-4 py-3"><div class="h-4 w-20 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-4 py-3"><div class="h-4 w-40 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-4 py-3"><div class="h-4 w-24 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-4 py-3 text-right"><div class="ml-auto h-4 w-28 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-4 py-3 text-right"><div class="ml-auto h-4 w-28 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-4 py-3 text-right"><div class="ml-auto h-4 w-20 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-                <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">Total biaya yang diajukan ke BPJS</p>
-            </div>
+            </template>
 
-            <!-- Card 3: Total disetujui -->
-            <div class="rounded-xl border border-emerald-100 bg-white p-5 shadow-sm dark:border-emerald-900/30 dark:bg-gray-800">
-                <div class="flex items-start justify-between">
-                    <div>
-                        <p class="text-sm text-gray-500 dark:text-gray-400">Total Disetujui</p>
-                        <p class="mt-1 text-2xl font-bold leading-tight text-emerald-600 dark:text-emerald-400">
-                            {{ formatRupiahKompak(cards.total_disetujui) }}
-                        </p>
-                    </div>
-                    <div class="rounded-lg bg-emerald-50 p-2.5 dark:bg-emerald-900/20">
-                        <BadgeCheck :size="22" class="text-emerald-500" />
-                    </div>
-                </div>
-                <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">Total biaya yang disetujui oleh BPJS</p>
-            </div>
-
-            <!-- Card 4: Selisih (with sticky hover tooltip) -->
+            <!-- Error alert -->
             <div
-                class="relative rounded-xl border border-orange-100 bg-white p-5 shadow-sm dark:border-orange-900/30 dark:bg-gray-800"
-                @mouseenter="showSelisihTooltip"
-                @mouseleave="startHideSelisihTooltip"
+                v-if="data?.error"
+                class="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
             >
-                <div class="flex items-start justify-between">
-                    <div>
-                        <p class="text-sm text-gray-500 dark:text-gray-400">Selisih</p>
-                        <p
-                            class="mt-1 text-2xl font-bold leading-tight"
-                            :class="cards.selisih >= 0 ? 'text-orange-500 dark:text-orange-400' : 'text-red-500 dark:text-red-400'"
-                        >
-                            {{ formatRupiahKompak(cards.selisih) }}
-                        </p>
-                    </div>
-                    <div class="rounded-lg bg-orange-50 p-2.5 dark:bg-orange-900/20">
-                        <AlertOctagonIcon :size="22" class="text-orange-500" />
-                    </div>
-                </div>
-                <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
-                     Lihat daftar
-                    
-                </p>
+                <AlertCircle :size="18" class="mt-0.5 shrink-0" />
+                <p>{{ data.error }}</p>
+            </div>
 
-                <!-- Tooltip daftar SEP dengan selisih -->
+            <!-- Cards -->
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+
+                <!-- Card 1: Total klaim -->
+                <div class="rounded-xl border border-blue-100 bg-white p-5 shadow-sm dark:border-blue-900/30 dark:bg-gray-800">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <p class="text-sm text-gray-500 dark:text-gray-400">Total Klaim</p>
+                            <p class="mt-1 text-3xl font-bold text-blue-600 dark:text-blue-400">
+                                {{ (data?.cards.total_klaim ?? 0).toLocaleString('id-ID') }}
+                            </p>
+                        </div>
+                        <div class="rounded-lg bg-blue-50 p-2.5 dark:bg-blue-900/20">
+                            <FileText :size="22" class="text-blue-500" />
+                        </div>
+                    </div>
+                    <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">Jumlah SEP bulan {{ bulanLabel }}</p>
+                </div>
+
+                <!-- Card 2: Total diajukan -->
+                <div class="rounded-xl border border-indigo-100 bg-white p-5 shadow-sm dark:border-indigo-900/30 dark:bg-gray-800">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <p class="text-sm text-gray-500 dark:text-gray-400">Total Diajukan</p>
+                            <p class="mt-1 text-2xl font-bold leading-tight text-indigo-600 dark:text-indigo-400">
+                                {{ formatRupiahKompak(data?.cards.total_diajukan ?? 0) }}
+                            </p>
+                        </div>
+                        <div class="rounded-lg bg-indigo-50 p-2.5 dark:bg-indigo-900/20">
+                            <BadgeDollarSign :size="22" class="text-indigo-500" />
+                        </div>
+                    </div>
+                    <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">Total biaya yang diajukan ke BPJS</p>
+                </div>
+
+                <!-- Card 3: Total disetujui -->
+                <div class="rounded-xl border border-emerald-100 bg-white p-5 shadow-sm dark:border-emerald-900/30 dark:bg-gray-800">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <p class="text-sm text-gray-500 dark:text-gray-400">Total Disetujui</p>
+                            <p class="mt-1 text-2xl font-bold leading-tight text-emerald-600 dark:text-emerald-400">
+                                {{ formatRupiahKompak(data?.cards.total_disetujui ?? 0) }}
+                            </p>
+                        </div>
+                        <div class="rounded-lg bg-emerald-50 p-2.5 dark:bg-emerald-900/20">
+                            <BadgeCheck :size="22" class="text-emerald-500" />
+                        </div>
+                    </div>
+                    <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">Total biaya yang disetujui oleh BPJS</p>
+                </div>
+
+                <!-- Card 4: Selisih (with sticky hover tooltip) -->
                 <div
-                    v-if="selisihTooltipVisible && selisih_detail.length"
-                    class="absolute right-0 top-full z-50 mt-1 w-full min-w-96 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900"
+                    class="relative rounded-xl border border-orange-100 bg-white p-5 shadow-sm dark:border-orange-900/30 dark:bg-gray-800"
                     @mouseenter="showSelisihTooltip"
                     @mouseleave="startHideSelisihTooltip"
                 >
-                    <div class="border-b border-gray-100 px-3 py-2 dark:border-gray-800">
-                        <p class="text-xs font-semibold text-gray-500 dark:text-gray-400">
-                            SEP dengan Selisih — Top {{ selisih_detail.length }}
-                            <span v-if="cards.selisih_count > selisih_detail.length" class="font-normal text-gray-400">
-                                dari {{ cards.selisih_count.toLocaleString('id-ID') }}
-                            </span>
-                        </p>
-                    </div>
-                    <ul class="max-h-64 overflow-y-auto py-1">
-                        <li
-                            v-for="s in selisih_detail"
-                            :key="s.SepNo"
-                            class="grid grid-cols-[1fr_auto] gap-x-3 px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800"
-                        >
-                            <div class="min-w-0">
-                                <span class="block font-mono text-xs text-gray-500 dark:text-gray-400">{{ s.SepNo }}</span>
-                                <span class="block truncate text-xs text-gray-700 dark:text-gray-300">
-                                    {{ s.NoRM ? `${s.NoRM} · ` : '' }}{{ s.NamaPasien || '—' }}
-                                </span>
-                            </div>
-                            <span class="shrink-0 self-center text-xs font-medium text-orange-600 dark:text-orange-400">
-                                {{ formatRupiahKompak(s.Selisih) }}
-                            </span>
-                        </li>
-                    </ul>
-                </div>
-            </div>
-
-        </div>
-
-        <!-- Table card -->
-        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-
-            <!-- Search bar -->
-            <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-                <div class="relative max-w-sm">
-                    <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input
-                        v-model="searchInput"
-                        type="text"
-                        placeholder="Cari No. SEP, No. RM, Nama, atau Tanggal..."
-                        class="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-8 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-500"
-                    />
-                    <button
-                        v-if="searchInput"
-                        class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                        @click="searchInput = ''"
-                    >
-                        <X :size="14" />
-                    </button>
-                </div>
-            </div>
-
-            <div class="overflow-auto max-h-[60svh]">
-                <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-                    <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700/50">
-                        <tr>
-                            <th class="w-10 px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No</th>
-                            <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No. SEP</th>
-                            <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No. RM</th>
-                            <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Nama Pasien</th>
-                            <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Tgl. Verifikasi</th>
-                            <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Biaya Diajukan</th>
-                            <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Biaya Disetujui</th>
-                            <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Selisih</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                        <tr v-if="!items.length">
-                            <td colspan="8" class="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
-                                <template v-if="props.error">Tidak ada data — koneksi ke database gagal.</template>
-                                <template v-else-if="searchInput">Tidak ada hasil untuk "<strong>{{ searchInput }}</strong>".</template>
-                                <template v-else>Tidak ada data klaim untuk {{ bulanLabel }}.</template>
-                            </td>
-                        </tr>
-                        <tr
-                            v-for="row in items"
-                            :key="row.SepNo"
-                            class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
-                        >
-                            <td class="px-4 py-2.5 text-gray-500 dark:text-gray-400">{{ row.No }}</td>
-                            <td class="px-4 py-2.5 font-mono text-xs text-gray-900 dark:text-gray-100">{{ row.SepNo }}</td>
-                            <td class="px-4 py-2.5 font-mono text-xs text-gray-600 dark:text-gray-400">{{ row.NoRM || '—' }}</td>
-                            <td class="px-4 py-2.5 text-gray-800 dark:text-gray-200">{{ row.NamaPasien || '—' }}</td>
-                            <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ row.TanggalVerifikasi }}</td>
-                            <td class="px-4 py-2.5 text-right text-gray-900 dark:text-gray-100">{{ formatRupiah(row.BiayaDiajukan) }}</td>
-                            <td class="px-4 py-2.5 text-right text-gray-900 dark:text-gray-100">{{ formatRupiah(row.BiayaDisetujui) }}</td>
-                            <td
-                                class="px-4 py-2.5 text-right"
-                                :class="row.Selisih === 0
-                                    ? 'text-gray-400 dark:text-gray-500'
-                                    : row.Selisih > 0
-                                        ? 'text-orange-600 dark:text-orange-400'
-                                        : 'text-red-600 dark:text-red-400'"
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <p class="text-sm text-gray-500 dark:text-gray-400">Selisih</p>
+                            <p
+                                class="mt-1 text-2xl font-bold leading-tight"
+                                :class="(data?.cards.selisih ?? 0) >= 0 ? 'text-orange-500 dark:text-orange-400' : 'text-red-500 dark:text-red-400'"
                             >
-                                {{ row.Selisih === 0 ? '—' : formatRupiah(row.Selisih) }}
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
+                                {{ formatRupiahKompak(data?.cards.selisih ?? 0) }}
+                            </p>
+                        </div>
+                        <div class="rounded-lg bg-orange-50 p-2.5 dark:bg-orange-900/20">
+                            <AlertOctagonIcon :size="22" class="text-orange-500" />
+                        </div>
+                    </div>
+                    <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
+                         Lihat daftar
+
+                    </p>
+
+                    <!-- Tooltip daftar SEP dengan selisih -->
+                    <div
+                        v-if="selisihTooltipVisible && (data?.selisih_detail?.length ?? 0) > 0"
+                        class="absolute right-0 top-full z-50 mt-1 w-full min-w-96 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900"
+                        @mouseenter="showSelisihTooltip"
+                        @mouseleave="startHideSelisihTooltip"
+                    >
+                        <div class="border-b border-gray-100 px-3 py-2 dark:border-gray-800">
+                            <p class="text-xs font-semibold text-gray-500 dark:text-gray-400">
+                                SEP dengan Selisih — Top {{ data?.selisih_detail?.length ?? 0 }}
+                                <span v-if="(data?.cards.selisih_count ?? 0) > (data?.selisih_detail?.length ?? 0)" class="font-normal text-gray-400">
+                                    dari {{ (data?.cards.selisih_count ?? 0).toLocaleString('id-ID') }}
+                                </span>
+                            </p>
+                        </div>
+                        <ul class="max-h-64 overflow-y-auto py-1">
+                            <li
+                                v-for="s in data?.selisih_detail ?? []"
+                                :key="s.SepNo"
+                                class="grid grid-cols-[1fr_auto] gap-x-3 px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
+                                <div class="min-w-0">
+                                    <span class="block font-mono text-xs text-gray-500 dark:text-gray-400">{{ s.SepNo }}</span>
+                                    <span class="block truncate text-xs text-gray-700 dark:text-gray-300">
+                                        {{ s.NoRM ? `${s.NoRM} · ` : '' }}{{ s.NamaPasien || '—' }}
+                                    </span>
+                                </div>
+                                <span class="shrink-0 self-center text-xs font-medium text-orange-600 dark:text-orange-400">
+                                    {{ formatRupiahKompak(s.Selisih) }}
+                                </span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+
             </div>
 
-            <!-- Pagination -->
-            <div
-                v-if="pagination.total > 0"
-                class="flex items-center justify-between border-t border-gray-200 px-4 py-3 dark:border-gray-700"
-            >
-                <span class="text-xs text-gray-500 dark:text-gray-400">
-                    Hal {{ pagination.current_page }} / {{ pagination.last_page }}
-                    &nbsp;·&nbsp;
-                    {{ pagination.total.toLocaleString('id-ID') }} klaim
-                </span>
-                <div class="flex items-center gap-1">
-                    <button
-                        :disabled="pagination.current_page === 1"
-                        class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
-                        @click="goToPage(pagination.current_page - 1)"
-                    >
-                        <ChevronLeft :size="14" />
-                    </button>
-                    <template v-for="p in pageNumbers" :key="p">
+            <!-- Table card -->
+            <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+
+                <!-- Search bar -->
+                <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+                    <div class="relative max-w-sm">
+                        <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input
+                            v-model="searchInput"
+                            type="text"
+                            placeholder="Cari No. SEP, No. RM, Nama, atau Tanggal..."
+                            class="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-8 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-500"
+                        />
                         <button
-                            v-if="typeof p === 'number'"
-                            class="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded border px-1 text-xs transition-colors"
-                            :class="p === pagination.current_page
-                                ? 'border-blue-500 bg-blue-500 text-white'
-                                : 'border-gray-200 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700'"
-                            @click="goToPage(p)"
-                        >{{ p }}</button>
-                        <span v-else class="px-0.5 text-xs text-gray-400">…</span>
-                    </template>
-                    <button
-                        :disabled="pagination.current_page === pagination.last_page"
-                        class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
-                        @click="goToPage(pagination.current_page + 1)"
-                    >
-                        <ChevronRight :size="14" />
-                    </button>
+                            v-if="searchInput"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                            @click="searchInput = ''"
+                        >
+                            <X :size="14" />
+                        </button>
+                    </div>
+                </div>
+
+                <div class="overflow-auto max-h-[60svh]">
+                    <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+                        <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700/50">
+                            <tr>
+                                <th class="w-10 px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No. SEP</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No. RM</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Nama Pasien</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Tgl. Verifikasi</th>
+                                <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Biaya Diajukan</th>
+                                <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Biaya Disetujui</th>
+                                <th class="px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-300">Selisih</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                            <tr v-if="!(data?.items?.length)">
+                                <td colspan="8" class="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
+                                    <template v-if="data?.error">Tidak ada data — koneksi ke database gagal.</template>
+                                    <template v-else-if="searchInput">Tidak ada hasil untuk "<strong>{{ searchInput }}</strong>".</template>
+                                    <template v-else>Tidak ada data klaim untuk {{ bulanLabel }}.</template>
+                                </td>
+                            </tr>
+                            <tr
+                                v-for="row in data?.items ?? []"
+                                :key="row.SepNo"
+                                class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                            >
+                                <td class="px-4 py-2.5 text-gray-500 dark:text-gray-400">{{ row.No }}</td>
+                                <td class="px-4 py-2.5 font-mono text-xs text-gray-900 dark:text-gray-100">{{ row.SepNo }}</td>
+                                <td class="px-4 py-2.5 font-mono text-xs text-gray-600 dark:text-gray-400">{{ row.NoRM || '—' }}</td>
+                                <td class="px-4 py-2.5 text-gray-800 dark:text-gray-200">{{ row.NamaPasien || '—' }}</td>
+                                <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ row.TanggalVerifikasi }}</td>
+                                <td class="px-4 py-2.5 text-right text-gray-900 dark:text-gray-100">{{ formatRupiah(row.BiayaDiajukan) }}</td>
+                                <td class="px-4 py-2.5 text-right text-gray-900 dark:text-gray-100">{{ formatRupiah(row.BiayaDisetujui) }}</td>
+                                <td
+                                    class="px-4 py-2.5 text-right"
+                                    :class="row.Selisih === 0
+                                        ? 'text-gray-400 dark:text-gray-500'
+                                        : row.Selisih > 0
+                                            ? 'text-orange-600 dark:text-orange-400'
+                                            : 'text-red-600 dark:text-red-400'"
+                                >
+                                    {{ row.Selisih === 0 ? '—' : formatRupiah(row.Selisih) }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                <div
+                    v-if="(data?.pagination.total ?? 0) > 0"
+                    class="flex items-center justify-between border-t border-gray-200 px-4 py-3 dark:border-gray-700"
+                >
+                    <span class="text-xs text-gray-500 dark:text-gray-400">
+                        Hal {{ data?.pagination.current_page ?? 1 }} / {{ data?.pagination.last_page ?? 1 }}
+                        &nbsp;·&nbsp;
+                        {{ (data?.pagination.total ?? 0).toLocaleString('id-ID') }} klaim
+                    </span>
+                    <div class="flex items-center gap-1">
+                        <button
+                            :disabled="(data?.pagination.current_page ?? 1) === 1"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
+                            @click="goToPage((data?.pagination.current_page ?? 1) - 1)"
+                        >
+                            <ChevronLeft :size="14" />
+                        </button>
+                        <template v-for="p in pageNumbers" :key="p">
+                            <button
+                                v-if="typeof p === 'number'"
+                                class="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded border px-1 text-xs transition-colors"
+                                :class="p === (data?.pagination.current_page ?? 1)
+                                    ? 'border-blue-500 bg-blue-500 text-white'
+                                    : 'border-gray-200 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700'"
+                                @click="goToPage(p)"
+                            >{{ p }}</button>
+                            <span v-else class="px-0.5 text-xs text-gray-400">…</span>
+                        </template>
+                        <button
+                            :disabled="(data?.pagination.current_page ?? 1) === (data?.pagination.last_page ?? 1)"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
+                            @click="goToPage((data?.pagination.current_page ?? 1) + 1)"
+                        >
+                            <ChevronRight :size="14" />
+                        </button>
+                    </div>
                 </div>
             </div>
-        </div>
+
+        </Deferred>
 
     </div>
 </template>

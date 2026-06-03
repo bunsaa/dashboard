@@ -88,6 +88,10 @@ const mainNavItems = computed<NavItem[]>(() => {
                 title: 'Data Kunjungan Dokter',
                 href: currentTeam.value ? downloadReport.kunjunganDokter(currentTeam.value.slug).url : '/',
             },
+            {
+                title: 'Kunjungan Pasien',
+                href: currentTeam.value ? downloadReport.kunjunganPasien(currentTeam.value.slug).url : '/',
+            },
         ],
     });
 

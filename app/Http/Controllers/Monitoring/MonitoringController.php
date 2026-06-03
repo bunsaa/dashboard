@@ -215,127 +215,131 @@ class MonitoringController extends Controller
         $rowsKey = 'klaim_bpjs_rows_'.$bulan.'_p'.$page.($q ? '_'.md5($q) : '');
         $rowsTtl = $q ? 60 : 300;
 
-        try {
-            // Cards — cached as plain array (never stdClass) to avoid unserialize issues
-            $cards = Cache::remember($summaryKey, 1800, function () use ($from, $to) {
-                $row = DB::connection('sqlsrv_report')->selectOne(<<<'SQL'
-                    SELECT
-                        COUNT(*) AS total_klaim,
-                        SUM(BiayaDiajukan)                                               AS total_diajukan,
-                        SUM(BiayaDisetujui)                                              AS total_disetujui,
-                        SUM(BiayaDiajukan) - SUM(BiayaDisetujui)                        AS selisih,
-                        SUM(CASE WHEN BiayaDiajukan != BiayaDisetujui THEN 1 ELSE 0 END) AS selisih_count
-                    FROM bpjsfpk WITH (NOLOCK)
-                    WHERE TanggalVerifikasi >= ? AND TanggalVerifikasi < ?
-                SQL, [$from, $to]);
-
-                return [
-                    'total_klaim'     => (int) ($row?->total_klaim ?? 0),
-                    'total_diajukan'  => (float) ($row?->total_diajukan ?? 0),
-                    'total_disetujui' => (float) ($row?->total_disetujui ?? 0),
-                    'selisih'         => (float) ($row?->selisih ?? 0),
-                    'selisih_count'   => (int) ($row?->selisih_count ?? 0),
-                ];
-            });
-
-            // Top 50 SEPs — cached as plain array
-            $selisihDetail = Cache::remember($selisihKey, 1800, function () use ($from, $to) {
-                return array_map(fn ($r) => [
-                    'SepNo'      => $r->SepNo,
-                    'NoRM'       => $r->NoRM,
-                    'NamaPasien' => $r->NamaPasien,
-                    'Selisih'    => (float) $r->Selisih,
-                ], DB::connection('sqlsrv_report')->select(<<<'SQL'
-                    SELECT TOP 50
-                        f.SepNo,
-                        ISNULL(sep.NoMR, '')       AS NoRM,
-                        ISNULL(sep.NamaPasien, '') AS NamaPasien,
-                        CAST(f.BiayaDiajukan - f.BiayaDisetujui AS DECIMAL(18,2)) AS Selisih
-                    FROM bpjsfpk f WITH (NOLOCK)
-                    LEFT JOIN BpjsSEP sep WITH (NOLOCK) ON sep.NoSEP = f.SepNo
-                    WHERE f.TanggalVerifikasi >= ? AND f.TanggalVerifikasi < ?
-                        AND f.BiayaDiajukan != f.BiayaDisetujui
-                    ORDER BY CAST(f.BiayaDiajukan - f.BiayaDisetujui AS DECIMAL(18,2)) DESC
-                SQL, [$from, $to]));
-            });
-
-            // Pagination total — when searching we need a separate count with JOIN
-            if ($q !== null) {
-                $countKey = 'klaim_bpjs_count_'.$bulan.'_'.md5($q);
-                $total = Cache::remember($countKey, 60, function () use ($from, $to, $searchClause, $searchParams) {
-                    $row = DB::connection('sqlsrv_report')->selectOne("
-                        SELECT COUNT(*) AS total
-                        FROM bpjsfpk f WITH (NOLOCK)
-                        LEFT JOIN BpjsSEP sep WITH (NOLOCK) ON sep.NoSEP = f.SepNo
-                        WHERE f.TanggalVerifikasi >= ? AND f.TanggalVerifikasi < ?
-                        {$searchClause}
-                    ", array_merge([$from, $to], $searchParams));
-
-                    return (int) ($row?->total ?? 0);
-                });
-            } else {
-                $total = $cards['total_klaim'];
-            }
-
-            // Paginated items — cached as plain array
-            $items = Cache::remember($rowsKey, $rowsTtl, function () use ($from, $to, $searchClause, $searchParams, $offset, $perPage) {
-                return array_map(fn ($r) => [
-                    'No'                => (int) $r->No,
-                    'SepNo'             => $r->SepNo,
-                    'NoRM'              => $r->NoRM,
-                    'NamaPasien'        => $r->NamaPasien,
-                    'TanggalVerifikasi' => $r->TanggalVerifikasi,
-                    'BiayaDiajukan'     => (float) $r->BiayaDiajukan,
-                    'BiayaDisetujui'    => (float) $r->BiayaDisetujui,
-                    'Selisih'           => (float) $r->Selisih,
-                    'NoBAHV'            => $r->NoBAHV,
-                ], DB::connection('sqlsrv_report')->select("
-                    WITH Ranked AS (
-                        SELECT
-                            ROW_NUMBER() OVER (ORDER BY f.TanggalVerifikasi DESC, f.SepNo) AS No,
-                            f.SepNo,
-                            ISNULL(sep.NoMR, '')       AS NoRM,
-                            ISNULL(sep.NamaPasien, '') AS NamaPasien,
-                            CONVERT(VARCHAR(10), f.TanggalVerifikasi, 23) AS TanggalVerifikasi,
-                            f.BiayaDiajukan,
-                            f.BiayaDisetujui,
-                            f.BiayaDiajukan - f.BiayaDisetujui AS Selisih,
-                            f.NoBAHV
-                        FROM bpjsfpk f WITH (NOLOCK)
-                        LEFT JOIN BpjsSEP sep WITH (NOLOCK) ON sep.NoSEP = f.SepNo
-                        WHERE f.TanggalVerifikasi >= ? AND f.TanggalVerifikasi < ?
-                        {$searchClause}
-                    )
-                    SELECT * FROM Ranked
-                    ORDER BY No
-                    OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-                ", array_merge([$from, $to], $searchParams, [$offset, $perPage])));
-            });
-
-            $pagination = [
-                'current_page' => $page,
-                'per_page'     => $perPage,
-                'total'        => $total,
-                'last_page'    => max(1, (int) ceil($total / $perPage)),
-            ];
-            $error = null;
-        } catch (Throwable $e) {
-            Log::error('klaimBpjs error', ['bulan' => $bulan, 'q' => $q, 'error' => $e->getMessage()]);
-            $cards = ['total_klaim' => 0, 'total_diajukan' => 0, 'total_disetujui' => 0, 'selisih' => 0, 'selisih_count' => 0];
-            $items = [];
-            $selisihDetail = [];
-            $pagination = ['current_page' => 1, 'per_page' => $perPage, 'total' => 0, 'last_page' => 1];
-            $error = 'Tidak dapat terhubung ke database: '.$e->getMessage();
-        }
-
         return Inertia::render('Monitoring/KlaimBpjs', [
-            'bulan'          => $bulan,
-            'q'              => $q ?? '',
-            'cards'          => $cards,
-            'items'          => $items,
-            'selisih_detail' => $selisihDetail,
-            'pagination'     => $pagination,
-            'error'          => $error,
+            'bulan' => $bulan,
+            'q' => $q ?? '',
+            'data' => Inertia::defer(function () use ($from, $to, $q, $page, $perPage, $offset, $searchClause, $searchParams, $summaryKey, $selisihKey, $rowsKey, $rowsTtl, $bulan) {
+                try {
+                    // Cards — cached as plain array (never stdClass) to avoid unserialize issues
+                    $cards = Cache::remember($summaryKey, 1800, function () use ($from, $to) {
+                        $row = DB::connection('sqlsrv_report')->selectOne(<<<'SQL'
+                            SELECT
+                                COUNT(*) AS total_klaim,
+                                SUM(BiayaDiajukan)                                               AS total_diajukan,
+                                SUM(BiayaDisetujui)                                              AS total_disetujui,
+                                SUM(BiayaDiajukan) - SUM(BiayaDisetujui)                        AS selisih,
+                                SUM(CASE WHEN BiayaDiajukan != BiayaDisetujui THEN 1 ELSE 0 END) AS selisih_count
+                            FROM bpjsfpk WITH (NOLOCK)
+                            WHERE TanggalVerifikasi >= ? AND TanggalVerifikasi < ?
+                        SQL, [$from, $to]);
+
+                        return [
+                            'total_klaim' => (int) ($row?->total_klaim ?? 0),
+                            'total_diajukan' => (float) ($row?->total_diajukan ?? 0),
+                            'total_disetujui' => (float) ($row?->total_disetujui ?? 0),
+                            'selisih' => (float) ($row?->selisih ?? 0),
+                            'selisih_count' => (int) ($row?->selisih_count ?? 0),
+                        ];
+                    });
+
+                    // Top 50 SEPs — cached as plain array
+                    $selisihDetail = Cache::remember($selisihKey, 1800, function () use ($from, $to) {
+                        return array_map(fn ($r) => [
+                            'SepNo' => $r->SepNo,
+                            'NoRM' => $r->NoRM,
+                            'NamaPasien' => $r->NamaPasien,
+                            'Selisih' => (float) $r->Selisih,
+                        ], DB::connection('sqlsrv_report')->select(<<<'SQL'
+                            SELECT TOP 50
+                                f.SepNo,
+                                ISNULL(sep.NoMR, '')       AS NoRM,
+                                ISNULL(sep.NamaPasien, '') AS NamaPasien,
+                                CAST(f.BiayaDiajukan - f.BiayaDisetujui AS DECIMAL(18,2)) AS Selisih
+                            FROM bpjsfpk f WITH (NOLOCK)
+                            LEFT JOIN BpjsSEP sep WITH (NOLOCK) ON sep.NoSEP = f.SepNo
+                            WHERE f.TanggalVerifikasi >= ? AND f.TanggalVerifikasi < ?
+                                AND f.BiayaDiajukan != f.BiayaDisetujui
+                            ORDER BY CAST(f.BiayaDiajukan - f.BiayaDisetujui AS DECIMAL(18,2)) DESC
+                        SQL, [$from, $to]));
+                    });
+
+                    // Pagination total — when searching we need a separate count with JOIN
+                    if ($q !== null) {
+                        $countKey = 'klaim_bpjs_count_'.$bulan.'_'.md5($q);
+                        $total = Cache::remember($countKey, 60, function () use ($from, $to, $searchClause, $searchParams) {
+                            $row = DB::connection('sqlsrv_report')->selectOne("
+                                SELECT COUNT(*) AS total
+                                FROM bpjsfpk f WITH (NOLOCK)
+                                LEFT JOIN BpjsSEP sep WITH (NOLOCK) ON sep.NoSEP = f.SepNo
+                                WHERE f.TanggalVerifikasi >= ? AND f.TanggalVerifikasi < ?
+                                {$searchClause}
+                            ", array_merge([$from, $to], $searchParams));
+
+                            return (int) ($row?->total ?? 0);
+                        });
+                    } else {
+                        $total = $cards['total_klaim'];
+                    }
+
+                    // Paginated items — cached as plain array
+                    $items = Cache::remember($rowsKey, $rowsTtl, function () use ($from, $to, $searchClause, $searchParams, $offset, $perPage) {
+                        return array_map(fn ($r) => [
+                            'No' => (int) $r->No,
+                            'SepNo' => $r->SepNo,
+                            'NoRM' => $r->NoRM,
+                            'NamaPasien' => $r->NamaPasien,
+                            'TanggalVerifikasi' => $r->TanggalVerifikasi,
+                            'BiayaDiajukan' => (float) $r->BiayaDiajukan,
+                            'BiayaDisetujui' => (float) $r->BiayaDisetujui,
+                            'Selisih' => (float) $r->Selisih,
+                            'NoBAHV' => $r->NoBAHV,
+                        ], DB::connection('sqlsrv_report')->select("
+                            WITH Ranked AS (
+                                SELECT
+                                    ROW_NUMBER() OVER (ORDER BY f.TanggalVerifikasi DESC, f.SepNo) AS No,
+                                    f.SepNo,
+                                    ISNULL(sep.NoMR, '')       AS NoRM,
+                                    ISNULL(sep.NamaPasien, '') AS NamaPasien,
+                                    CONVERT(VARCHAR(10), f.TanggalVerifikasi, 23) AS TanggalVerifikasi,
+                                    f.BiayaDiajukan,
+                                    f.BiayaDisetujui,
+                                    f.BiayaDiajukan - f.BiayaDisetujui AS Selisih,
+                                    f.NoBAHV
+                                FROM bpjsfpk f WITH (NOLOCK)
+                                LEFT JOIN BpjsSEP sep WITH (NOLOCK) ON sep.NoSEP = f.SepNo
+                                WHERE f.TanggalVerifikasi >= ? AND f.TanggalVerifikasi < ?
+                                {$searchClause}
+                            )
+                            SELECT * FROM Ranked
+                            ORDER BY No
+                            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                        ", array_merge([$from, $to], $searchParams, [$offset, $perPage])));
+                    });
+
+                    return [
+                        'cards' => $cards,
+                        'items' => $items,
+                        'selisih_detail' => $selisihDetail,
+                        'pagination' => [
+                            'current_page' => $page,
+                            'per_page' => $perPage,
+                            'total' => $total,
+                            'last_page' => max(1, (int) ceil($total / $perPage)),
+                        ],
+                        'error' => null,
+                    ];
+                } catch (Throwable $e) {
+                    Log::error('klaimBpjs error', ['bulan' => $bulan, 'q' => $q, 'error' => $e->getMessage()]);
+
+                    return [
+                        'cards' => ['total_klaim' => 0, 'total_diajukan' => 0.0, 'total_disetujui' => 0.0, 'selisih' => 0.0, 'selisih_count' => 0],
+                        'items' => [],
+                        'selisih_detail' => [],
+                        'pagination' => ['current_page' => 1, 'per_page' => $perPage, 'total' => 0, 'last_page' => 1],
+                        'error' => 'Tidak dapat terhubung ke database: '.$e->getMessage(),
+                    ];
+                }
+            }),
         ]);
     }
 

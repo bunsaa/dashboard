@@ -332,35 +332,42 @@ class DownloadReportController extends Controller
         $itemsCacheKey = 'billing_items_'.$tahun.'_'.($bulan ?? 'all').'_p'.$page.($q ? '_'.md5($q) : '');
         $itemsCacheTtl = $q ? 60 : 300;
 
-        $error = null;
-        try {
-            $items = Cache::remember($itemsCacheKey, $itemsCacheTtl, fn () => array_map(fn ($r) => (array) $r, $this->queryBillingItems($tahun, $bulan, $page, $q)));
-            $total = count($items) > 0 ? (int) ($items[0]['TotalCount'] ?? 0) : 0;
-        } catch (Throwable $e) {
-            $items = [];
-            $total = 0;
-            $msg = $e->getMessage();
-            $error = str_contains($msg, 'not supported') || str_contains($msg, 'could not find driver')
-                ? 'Driver PHP SQL Server (pdo_sqlsrv) belum terpasang di server ini. Hubungi administrator untuk menginstalnya.'
-                : 'Tidak dapat terhubung ke database TARAKAN: '.$msg;
-        }
-
         return Inertia::render('DownloadReport/BillingNonBpjs', [
             'tahun' => $tahun,
             'bulan' => $bulan,
-            'items' => $items,
-            'pagination' => [
-                'total' => $total,
-                'perPage' => 10,
-                'currentPage' => $page,
-                'lastPage' => max(1, (int) ceil($total / 10)),
-            ],
-            'error' => $error,
             'cards' => Inertia::defer(function () use ($cacheKey, $cacheTtl, $tahun, $bulan, $q) {
                 return Cache::remember($cacheKey, $cacheTtl, function () use ($tahun, $bulan, $q) {
                     return $this->buildBillingCards($tahun, $bulan, $q);
                 });
             }, rescue: true),
+            'tableData' => Inertia::defer(function () use ($itemsCacheKey, $itemsCacheTtl, $tahun, $bulan, $page, $q) {
+                try {
+                    $items = Cache::remember($itemsCacheKey, $itemsCacheTtl, fn () => array_map(fn ($r) => (array) $r, $this->queryBillingItems($tahun, $bulan, $page, $q)));
+                    $total = count($items) > 0 ? (int) ($items[0]['TotalCount'] ?? 0) : 0;
+
+                    return [
+                        'items' => $items,
+                        'pagination' => [
+                            'total' => $total,
+                            'perPage' => 10,
+                            'currentPage' => $page,
+                            'lastPage' => max(1, (int) ceil($total / 10)),
+                        ],
+                        'error' => null,
+                    ];
+                } catch (Throwable $e) {
+                    $msg = $e->getMessage();
+                    $error = str_contains($msg, 'not supported') || str_contains($msg, 'could not find driver')
+                        ? 'Driver PHP SQL Server (pdo_sqlsrv) belum terpasang di server ini. Hubungi administrator untuk menginstalnya.'
+                        : 'Tidak dapat terhubung ke database TARAKAN: '.$msg;
+
+                    return [
+                        'items' => [],
+                        'pagination' => ['total' => 0, 'perPage' => 10, 'currentPage' => $page, 'lastPage' => 1],
+                        'error' => $error,
+                    ];
+                }
+            }),
         ]);
     }
 
@@ -372,7 +379,7 @@ class DownloadReportController extends Controller
         try {
             $items = $this->queryBillingExcel($tahun, $bulan);
         } catch (Throwable $e) {
-            abort(503, 'Database TARAKAN tidak tersedia: ' . $e->getMessage());
+            abort(503, 'Database TARAKAN tidak tersedia: '.$e->getMessage());
         }
 
         return $this->buildBillingExcel($items, $tahun, $bulan);
@@ -445,7 +452,7 @@ class DownloadReportController extends Controller
         $row = $result[0] ?? null;
 
         return [
-            'totalKunjungan'    => (int) ($row?->TotalKunjungan ?? 0),
+            'totalKunjungan' => (int) ($row?->TotalKunjungan ?? 0),
             'totalTagihanMitra' => (float) ($row?->TotalTagihanMitra ?? 0),
             'totalTagihanTunai' => (float) ($row?->TotalTagihanTunai ?? 0),
             'totalTagihanAktual' => (float) ($row?->TotalTagihanAktual ?? 0),
@@ -489,7 +496,12 @@ class DownloadReportController extends Controller
                 )"
             : '';
 
-        $params = [$startDate, $endDate];
+        // Pre-filter on indexed RegistrationDate (±31 day buffer) so SQL Server
+        // can use the index before evaluating the CROSS APPLY date expression.
+        $preStart = date('Y-m-d', strtotime($startDate.' -31 days'));
+        $preEnd = date('Y-m-d', strtotime($endDate.' +31 days'));
+
+        $params = [$preStart, $preEnd, $startDate, $endDate];
         if ($q) {
             array_push($params, $q, $q, $q, $q, $q, $q);
         }
@@ -550,6 +562,7 @@ class DownloadReportController extends Controller
                 LEFT  JOIN [dbo].[IntermBill]  ib WITH (NOLOCK) ON ib.RegistrationNo = r.RegistrationNo
                                                                 AND ib.IsVoid = 0
                 WHERE r.IsVoid = 0
+                  AND r.RegistrationDate BETWEEN ? AND ?
                   AND ed.EffectiveDate BETWEEN ? AND ?
                   {$searchWhere}
                 GROUP BY
@@ -650,7 +663,6 @@ class DownloadReportController extends Controller
             ORDER BY EffectiveDate DESC, RegistrationNo
         SQL, [$startDate, $endDate]);
     }
-
 
     /**
      * @param  object[]  $items
@@ -884,24 +896,30 @@ class DownloadReportController extends Controller
         $itemsCacheKey = 'kunjungan_items_'.$fromDate.'_'.$toDate.'_p'.$page.($q ? '_'.md5($q) : '');
         $itemsCacheTtl = $q ? 60 : 300;
 
-        try {
-            $items = Cache::remember($itemsCacheKey, $itemsCacheTtl, fn () => array_map(fn ($r) => (array) $r, $this->queryKunjunganItems($fromDate, $toDate, $page, $q)));
-            $total = count($items) > 0 ? (int) ($items[0]['TotalDokter'] ?? 0) : 0;
-        } catch (Throwable $e) {
-            $items = [];
-            $total = 0;
-        }
-
         return Inertia::render('DownloadReport/KunjunganDokter', [
             'fromDate' => $fromDate,
             'toDate' => $toDate,
-            'items' => $items,
-            'pagination' => [
-                'total' => $total,
-                'perPage' => 10,
-                'currentPage' => $page,
-                'lastPage' => max(1, (int) ceil($total / 10)),
-            ],
+            'tableData' => Inertia::defer(function () use ($itemsCacheKey, $itemsCacheTtl, $fromDate, $toDate, $page, $q) {
+                try {
+                    $items = Cache::remember($itemsCacheKey, $itemsCacheTtl, fn () => array_map(fn ($r) => (array) $r, $this->queryKunjunganItems($fromDate, $toDate, $page, $q)));
+                    $total = count($items) > 0 ? (int) ($items[0]['TotalDokter'] ?? 0) : 0;
+
+                    return [
+                        'items' => $items,
+                        'pagination' => [
+                            'total' => $total,
+                            'perPage' => 10,
+                            'currentPage' => $page,
+                            'lastPage' => max(1, (int) ceil($total / 10)),
+                        ],
+                    ];
+                } catch (Throwable $e) {
+                    return [
+                        'items' => [],
+                        'pagination' => ['total' => 0, 'perPage' => 10, 'currentPage' => $page, 'lastPage' => 1],
+                    ];
+                }
+            }),
             'detail' => Inertia::optional(function () use ($detailId, $fromDate, $toDate) {
                 if (! $detailId) {
                     return null;
@@ -1350,6 +1368,363 @@ class DownloadReportController extends Controller
         unset($spreadsheet);
 
         return response()->download($tmpFile, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // KUNJUNGAN PASIEN HARI INI
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Query semua kunjungan rawat jalan hari ini.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function queryKunjunganPasienHariIni(): array
+    {
+        $rows = DB::connection('sqlsrv_report')->select(<<<'SQL'
+            SELECT
+                r.RegistrationNo,
+                CONVERT(varchar(10), r.RegistrationDate, 23) AS RegistrationDate,
+                CONVERT(varchar(8),  r.RegistrationTime, 108) AS RegistrationTime,
+                p.MedicalNo               AS NoRekamMedis,
+                LTRIM(RTRIM(
+                    ISNULL(p.FirstName, '') + ' ' +
+                    ISNULL(p.MiddleName, '') + ' ' +
+                    ISNULL(p.LastName, '')
+                ))                        AS NamaPasien,
+                r.AgeInYear               AS Umur,
+                p.Sex                     AS JK,
+                su.ServiceUnitName        AS NamaPoli,
+                ISNULL(pm.ParamedicName, '-') AS NamaDokter,
+                g.GuarantorName           AS Penjamin,
+                r.GuarantorCardNo         AS NoKartu,
+                r.BpjsSepNo               AS NoSEP,
+                CONVERT(varchar(8), a.SlotStartTime, 108) AS JamSlot,
+                CASE
+                    WHEN a.SlotStartTime IS NOT NULL AND CONVERT(varchar(8), a.SlotStartTime, 108) > '12:00:00' THEN 'SORE'
+                    WHEN a.SlotStartTime IS NOT NULL AND CONVERT(varchar(8), a.SlotStartTime, 108) <= '12:00:00' THEN 'PAGI'
+                    WHEN r.IsAfterMidday = 1 THEN 'SORE'
+                    ELSE 'PAGI'
+                END                       AS KeteranganWaktu
+            FROM Registration r WITH (NOLOCK)
+            LEFT JOIN Patient      p  ON r.PatientID     = p.PatientID
+            LEFT JOIN ServiceUnit  su ON r.ServiceUnitID = su.ServiceUnitID
+            LEFT JOIN Guarantor    g  ON r.GuarantorID   = g.GuarantorID
+            LEFT JOIN Appointment  a  ON r.AppointmentNo = a.AppointmentNo
+                                     AND r.AppointmentNo <> ''
+            LEFT JOIN Paramedic    pm ON r.ParamedicID   = pm.ParamedicID
+            WHERE
+                CAST(r.RegistrationDate AS DATE) = CAST(GETDATE() AS DATE)
+                AND r.IsVoid             = 0
+                AND r.SRRegistrationType = 'OPR'
+                AND r.ServiceUnitID     <> 'D2.1.C01'
+            ORDER BY
+                r.IsAfterMidday ASC,
+                r.RegistrationTime ASC
+        SQL);
+
+        return array_map(fn ($r) => (array) $r, $rows);
+    }
+
+    /** Tentukan biaya berdasarkan nama poli (konsul/lab/radiologi). */
+    private function getBiayaPoli(string $namaPoli): int
+    {
+        $upper = strtoupper($namaPoli);
+        if (str_contains($upper, 'LAB') || str_contains($upper, 'LABORATORIUM')) {
+            return 10000;
+        }
+        if (str_contains($upper, 'RADIO') || str_contains($upper, 'RONTGEN') || str_contains($upper, 'RADIOLOGI')) {
+            return 15000;
+        }
+
+        return 60000; // konsul dokter
+    }
+
+    public function kunjunganPasien(): Response
+    {
+        return Inertia::render('DownloadReport/KunjunganPasien', [
+            'tanggal' => now()->translatedFormat('d F Y'),
+            'items' => Inertia::defer(function () {
+                try {
+                    $rows = $this->queryKunjunganPasienHariIni();
+
+                    return ['rows' => $rows, 'error' => null];
+                } catch (Throwable $e) {
+                    $msg = $e->getMessage();
+
+                    return [
+                        'rows' => [],
+                        'error' => str_contains($msg, 'could not find driver')
+                            ? 'Driver PHP SQL Server (pdo_sqlsrv) belum terpasang.'
+                            : 'Tidak dapat terhubung ke database TARAKAN: '.$msg,
+                    ];
+                }
+            }),
+        ]);
+    }
+
+    public function exportKunjunganPasien(): BinaryFileResponse
+    {
+        try {
+            $rows = $this->queryKunjunganPasienHariIni();
+        } catch (Throwable $e) {
+            abort(503, 'Database TARAKAN tidak tersedia: '.$e->getMessage());
+        }
+
+        $tanggal = now()->format('Y-m-d');
+        $headerStyle = [
+            'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
+            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF1E3A5F']],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
+            'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFAAAAAA']]],
+        ];
+        $borderStyle = [
+            'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFCCCCCC']]],
+        ];
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Kunjungan Pasien');
+
+        // Header info
+        $sheet->mergeCells('A1:L1');
+        $sheet->setCellValue('A1', 'LAPORAN KUNJUNGAN PASIEN RAWAT JALAN — '.$tanggal);
+        $sheet->getStyle('A1')->applyFromArray([
+            'font' => ['bold' => true, 'size' => 12],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+        ]);
+
+        // Column headers row 2
+        $headers = ['No', 'No. Registrasi', 'No. RM', 'Nama Pasien', 'Umur', 'JK', 'Nama Poli', 'Nama Dokter', 'Penjamin', 'No. Kartu', 'No. SEP', 'Ket. Waktu'];
+        foreach ($headers as $ci => $h) {
+            $sheet->setCellValueExplicit([$ci + 1, 2], $h, DataType::TYPE_STRING);
+        }
+        $sheet->getStyle('A2:L2')->applyFromArray($headerStyle);
+
+        foreach ($rows as $i => $row) {
+            $r = $i + 3;
+            $sheet->setCellValue([1, $r], $i + 1);
+            $sheet->setCellValueExplicit([2, $r], (string) ($row['RegistrationNo'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValueExplicit([3, $r], (string) ($row['NoRekamMedis'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValueExplicit([4, $r], (string) ($row['NamaPasien'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValue([5, $r], (int) ($row['Umur'] ?? 0));
+            $sheet->setCellValueExplicit([6, $r], (string) ($row['JK'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValueExplicit([7, $r], (string) ($row['NamaPoli'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValueExplicit([8, $r], (string) ($row['NamaDokter'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValueExplicit([9, $r], (string) ($row['Penjamin'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValueExplicit([10, $r], (string) ($row['NoKartu'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValueExplicit([11, $r], (string) ($row['NoSEP'] ?? ''), DataType::TYPE_STRING);
+            $sheet->setCellValueExplicit([12, $r], (string) ($row['KeteranganWaktu'] ?? ''), DataType::TYPE_STRING);
+        }
+
+        if (count($rows) > 0) {
+            $sheet->getStyle('A3:L'.(count($rows) + 2))->applyFromArray($borderStyle);
+        }
+
+        foreach (['A' => 5, 'B' => 18, 'C' => 16, 'D' => 34, 'E' => 7, 'F' => 5, 'G' => 26, 'H' => 28, 'I' => 22, 'J' => 18, 'K' => 16, 'L' => 12] as $col => $width) {
+            $sheet->getColumnDimension($col)->setWidth($width);
+        }
+        $sheet->getRowDimension(2)->setRowHeight(30);
+
+        $spreadsheet->setActiveSheetIndex(0);
+        $writer = new Xlsx($spreadsheet);
+        $tmpFile = tempnam(sys_get_temp_dir(), 'xl_');
+        $writer->save($tmpFile);
+        $spreadsheet->disconnectWorksheets();
+        unset($spreadsheet);
+
+        return response()->download($tmpFile, "kunjungan-pasien-{$tanggal}.xlsx", [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+    }
+
+    public function exportPayslipSore(): BinaryFileResponse
+    {
+        try {
+            $allRows = $this->queryKunjunganPasienHariIni();
+        } catch (Throwable $e) {
+            abort(503, 'Database TARAKAN tidak tersedia: '.$e->getMessage());
+        }
+
+        // Filter hanya SORE
+        $soreRows = array_values(array_filter($allRows, fn ($r) => ($r['KeteranganWaktu'] ?? '') === 'SORE'));
+
+        // Kelompokkan per dokter
+        $byDoctor = [];
+        foreach ($soreRows as $row) {
+            $dokter = trim($row['NamaDokter'] ?? '-');
+            if ($dokter === '' || $dokter === '-') {
+                $dokter = 'Tanpa Dokter';
+            }
+            $byDoctor[$dokter][] = $row;
+        }
+        ksort($byDoctor);
+
+        $tanggal = now()->format('Y-m-d');
+
+        $headerStyle = [
+            'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
+            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF1E3A5F']],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
+            'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFAAAAAA']]],
+        ];
+        $borderStyle = [
+            'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFCCCCCC']]],
+        ];
+        $subtotalStyle = [
+            'font' => ['bold' => true],
+            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FFE8F0FE']],
+            'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFAAAAAA']]],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_RIGHT],
+        ];
+
+        $spreadsheet = new Spreadsheet;
+
+        // ── Sheet ringkasan semua dokter ───────────────────────────────────────
+        $summary = $spreadsheet->getActiveSheet();
+        $summary->setTitle('Ringkasan');
+
+        $summary->mergeCells('A1:G1');
+        $summary->setCellValue('A1', 'PAYSLIP KUNJUNGAN SORE — '.$tanggal);
+        $summary->getStyle('A1')->applyFromArray([
+            'font' => ['bold' => true, 'size' => 13],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+        ]);
+
+        $summaryHeaders = ['No', 'Nama Dokter', 'Jml Pasien', 'Konsul (60.000)', 'Lab (10.000)', 'Radiologi (15.000)', 'Total Pendapatan'];
+        foreach ($summaryHeaders as $ci => $h) {
+            $summary->setCellValueExplicit([$ci + 1, 2], $h, DataType::TYPE_STRING);
+        }
+        $summary->getStyle('A2:G2')->applyFromArray($headerStyle);
+
+        $docNo = 0;
+        $grandTotal = 0;
+
+        foreach ($byDoctor as $dokterName => $pasienList) {
+            $docNo++;
+
+            // Hitung biaya per pasien
+            $totalKonsul = 0;
+            $totalLab = 0;
+            $totalRadiologi = 0;
+
+            foreach ($pasienList as $p) {
+                $biaya = $this->getBiayaPoli($p['NamaPoli'] ?? '');
+                if ($biaya === 10000) {
+                    $totalLab += $biaya;
+                } elseif ($biaya === 15000) {
+                    $totalRadiologi += $biaya;
+                } else {
+                    $totalKonsul += $biaya;
+                }
+            }
+
+            $subtotal = $totalKonsul + $totalLab + $totalRadiologi;
+            $grandTotal += $subtotal;
+
+            $sr = $docNo + 2;
+            $summary->setCellValue([1, $sr], $docNo);
+            $summary->setCellValueExplicit([2, $sr], $dokterName, DataType::TYPE_STRING);
+            $summary->setCellValue([3, $sr], count($pasienList));
+            $summary->setCellValue([4, $sr], $totalKonsul);
+            $summary->setCellValue([5, $sr], $totalLab);
+            $summary->setCellValue([6, $sr], $totalRadiologi);
+            $summary->setCellValue([7, $sr], $subtotal);
+
+            // Format angka sebagai currency
+            $summary->getStyle("D{$sr}:G{$sr}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $summary->getStyle("A{$sr}:G{$sr}")->applyFromArray($borderStyle);
+
+            // ── Sheet detail per dokter ──────────────────────────────────────
+            $detailSheet = $spreadsheet->createSheet();
+            $safeName = preg_replace('/[^A-Za-z0-9 ]/', '', $dokterName);
+            $safeName = mb_substr(trim($safeName), 0, 25);
+            $sheetTitle = mb_substr($docNo.'. '.$safeName, 0, 31);
+            $detailSheet->setTitle($sheetTitle);
+
+            // Title
+            $detailSheet->mergeCells('A1:H1');
+            $detailSheet->setCellValue('A1', 'PAYSLIP SORE — '.$dokterName.' — '.$tanggal);
+            $detailSheet->getStyle('A1')->applyFromArray([
+                'font' => ['bold' => true, 'size' => 12],
+                'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+            ]);
+
+            // Header tabel
+            $detailHeaders = ['No', 'No. Registrasi', 'No. RM', 'Nama Pasien', 'Nama Poli', 'Jenis Biaya', 'Biaya', 'Jam'];
+            foreach ($detailHeaders as $ci => $h) {
+                $detailSheet->setCellValueExplicit([$ci + 1, 2], $h, DataType::TYPE_STRING);
+            }
+            $detailSheet->getStyle('A2:H2')->applyFromArray($headerStyle);
+
+            $doctorTotal = 0;
+            foreach ($pasienList as $pi => $p) {
+                $dr = $pi + 3;
+                $biaya = $this->getBiayaPoli($p['NamaPoli'] ?? '');
+                $jenis = match ($biaya) {
+                    10000 => 'Tindakan Lab',
+                    15000 => 'Tindakan Radiologi',
+                    default => 'Konsul Dokter',
+                };
+                $doctorTotal += $biaya;
+
+                $detailSheet->setCellValue([1, $dr], $pi + 1);
+                $detailSheet->setCellValueExplicit([2, $dr], (string) ($p['RegistrationNo'] ?? ''), DataType::TYPE_STRING);
+                $detailSheet->setCellValueExplicit([3, $dr], (string) ($p['NoRekamMedis'] ?? ''), DataType::TYPE_STRING);
+                $detailSheet->setCellValueExplicit([4, $dr], (string) ($p['NamaPasien'] ?? ''), DataType::TYPE_STRING);
+                $detailSheet->setCellValueExplicit([5, $dr], (string) ($p['NamaPoli'] ?? ''), DataType::TYPE_STRING);
+                $detailSheet->setCellValueExplicit([6, $dr], $jenis, DataType::TYPE_STRING);
+                $detailSheet->setCellValue([7, $dr], $biaya);
+                $detailSheet->getStyle("G{$dr}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+                $detailSheet->setCellValueExplicit([8, $dr], (string) ($p['RegistrationTime'] ?? ''), DataType::TYPE_STRING);
+                $detailSheet->getStyle("A{$dr}:H{$dr}")->applyFromArray($borderStyle);
+            }
+
+            // Baris total dokter
+            $totalRow = count($pasienList) + 3;
+            $detailSheet->mergeCells("A{$totalRow}:F{$totalRow}");
+            $detailSheet->setCellValue("A{$totalRow}", 'TOTAL PENDAPATAN');
+            $detailSheet->setCellValue([7, $totalRow], $doctorTotal);
+            $detailSheet->getStyle("G{$totalRow}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $detailSheet->getStyle("A{$totalRow}:H{$totalRow}")->applyFromArray($subtotalStyle);
+
+            foreach (['A' => 5, 'B' => 18, 'C' => 15, 'D' => 34, 'E' => 24, 'F' => 20, 'G' => 16, 'H' => 10] as $col => $width) {
+                $detailSheet->getColumnDimension($col)->setWidth($width);
+            }
+            $detailSheet->getRowDimension(1)->setRowHeight(22);
+            $detailSheet->getRowDimension(2)->setRowHeight(30);
+        }
+
+        // Grand total baris ringkasan
+        if ($docNo > 0) {
+            $gtRow = $docNo + 3;
+            $summary->mergeCells("A{$gtRow}:C{$gtRow}");
+            $summary->setCellValue("A{$gtRow}", 'GRAND TOTAL');
+            $summary->setCellValue([7, $gtRow], $grandTotal);
+            $summary->getStyle("G{$gtRow}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $summary->getStyle("A{$gtRow}:G{$gtRow}")->applyFromArray($subtotalStyle);
+            $summary->getStyle("A{$gtRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+        }
+
+        if ($docNo > 0) {
+            $summary->getStyle('A3:G'.($docNo + 2))->applyFromArray($borderStyle);
+        }
+
+        foreach (['A' => 5, 'B' => 32, 'C' => 12, 'D' => 18, 'E' => 14, 'F' => 18, 'G' => 20] as $col => $width) {
+            $summary->getColumnDimension($col)->setWidth($width);
+        }
+        $summary->getRowDimension(2)->setRowHeight(36);
+
+        $spreadsheet->setActiveSheetIndex(0);
+        $writer = new Xlsx($spreadsheet);
+        $tmpFile = tempnam(sys_get_temp_dir(), 'xl_');
+        $writer->save($tmpFile);
+        $spreadsheet->disconnectWorksheets();
+        unset($spreadsheet);
+
+        return response()->download($tmpFile, "payslip-sore-{$tanggal}.xlsx", [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         ])->deleteFileAfterSend(true);
     }

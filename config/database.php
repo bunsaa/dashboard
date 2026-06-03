@@ -166,9 +166,12 @@ return [
             'prefix_indexes' => true,
             'encrypt' => env('SQLSRV_ENCRYPT', 'no'),
             'trust_server_certificate' => env('SQLSRV_TRUST_SERVER_CERTIFICATE', 'true'),
-            // Fail fast: batas waktu koneksi & query (detik)
+            // Fail fast: batas waktu koneksi (detik)
             'login_timeout' => 10,
-            'options' => [PDO::ATTR_TIMEOUT => 30],
+            // Batas waktu eksekusi query (detik) — cegah query lambat memblokir server
+            'options' => [
+                PDO::SQLSRV_ATTR_QUERY_TIMEOUT => 30,
+            ],
         ],
 
     ],

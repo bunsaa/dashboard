@@ -129,7 +129,7 @@ onMounted(() => refreshCaptcha());
                                     required
                                     autofocus
                                     :tabindex="1"
-                                    autocomplete="off"
+                                    autocomplete="username"
                                     placeholder="Masukkan NIP Anda"
                                     class="h-11 pl-10 text-[13px]"
                                 />

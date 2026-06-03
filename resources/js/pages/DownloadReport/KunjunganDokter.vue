@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head, router, usePage } from '@inertiajs/vue3';
+import { Deferred, Head, router, usePage } from '@inertiajs/vue3';
 import { ChevronLeft, ChevronRight, Download, Eye, Search, X } from 'lucide-vue-next';
 import { computed, ref, watch } from 'vue';
 import downloadReportRoutes from '@/routes/download-report';
@@ -44,11 +44,15 @@ type Detail = {
     rows: DetailRow[];
 };
 
+type TableData = {
+    items: DoctorRow[];
+    pagination: { total: number; perPage: number; currentPage: number; lastPage: number };
+};
+
 const props = defineProps<{
     fromDate: string;
     toDate: string;
-    items: DoctorRow[];
-    pagination: { total: number; perPage: number; currentPage: number; lastPage: number };
+    tableData?: TableData | null;
     detail?: Detail | null;
 }>();
 
@@ -76,7 +80,7 @@ function onSearchInput() {
         router.get(
             baseUrl(),
             { fromDate: props.fromDate, toDate: props.toDate, page: 1, q: searchInput.value || undefined },
-            { only: ['items', 'pagination'] },
+            { only: ['tableData'] },
         );
     }, 500);
 }
@@ -86,7 +90,7 @@ function clearSearch() {
     router.get(
         baseUrl(),
         { fromDate: props.fromDate, toDate: props.toDate, page: 1 },
-        { only: ['items', 'pagination'] },
+        { only: ['tableData'] },
     );
 }
 
@@ -94,7 +98,7 @@ function goToPage(pg: number) {
     router.get(
         baseUrl(),
         { fromDate: props.fromDate, toDate: props.toDate, page: pg, q: searchInput.value || undefined },
-        { only: ['items', 'pagination'] },
+        { only: ['tableData'] },
     );
 }
 
@@ -141,7 +145,8 @@ function doctorExcelUrl(row: DoctorRow): string {
 
 // ── Pagination ────────────────────────────────────────────────────────────────
 const pageNumbers = computed<(number | '...')[]>(() => {
-    const { currentPage, lastPage } = props.pagination;
+    const currentPage = props.tableData?.pagination.currentPage ?? 1;
+    const lastPage = props.tableData?.pagination.lastPage ?? 1;
     if (lastPage <= 10) {
         return Array.from({ length: lastPage }, (_, i) => i + 1);
     }
@@ -162,6 +167,9 @@ const pageNumbers = computed<(number | '...')[]>(() => {
 const detailTotalRJ = computed(() => modalDetail.value?.rows.reduce((s, r) => s + Number(r.JumlahRJ), 0) ?? 0);
 const detailTotalRI = computed(() => modalDetail.value?.rows.reduce((s, r) => s + Number(r.JumlahRI), 0) ?? 0);
 const detailTotal = computed(() => detailTotalRJ.value + detailTotalRI.value);
+
+// suppress unused warning — excelAllUrl is kept for future use
+void excelAllUrl;
 </script>
 
 <template>
@@ -177,13 +185,6 @@ const detailTotal = computed(() => detailTotalRJ.value + detailTotalRI.value);
                     Rekapitulasi kunjungan per dokter RSUD Tarakan
                 </p>
             </div>
-            <!-- <a
-                :href="excelAllUrl"
-                class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700"
-            >
-                <Download :size="16" />
-                Download Excel
-            </a> -->
         </div>
 
         <!-- Date range filter -->
@@ -212,137 +213,174 @@ const detailTotal = computed(() => detailTotalRJ.value + detailTotalRI.value);
             </button>
         </div>
 
-        <!-- Search bar -->
-        <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="flex flex-wrap items-center gap-2">
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">Cari Dokter:</label>
-                <div class="relative">
-                    <Search :size="14" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input
-                        v-model="searchInput"
-                        type="text"
-                        placeholder="Nama dokter..."
-                        class="h-9 w-60 rounded-lg border border-gray-200 bg-white pl-8 pr-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
-                        @input="onSearchInput"
-                        @keydown.enter.prevent="onSearchInput"
-                    />
+        <Deferred data="tableData">
+            <template #fallback>
+                <!-- Search skeleton -->
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="h-9 w-60 animate-pulse rounded-lg bg-gray-200 dark:bg-gray-700" />
+                    <div class="h-4 w-24 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
                 </div>
-                <button
-                    v-if="searchInput"
-                    class="inline-flex h-9 items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm text-gray-500 hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-700"
-                    @click="clearSearch"
-                >
-                    <X :size="14" />
-                    Reset
-                </button>
-            </div>
-            <span class="text-xs text-gray-500 dark:text-gray-400">
-                {{ pagination.total.toLocaleString('id-ID') }} dokter
-            </span>
-        </div>
+                <!-- Table skeleton -->
+                <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                    <div class="overflow-auto max-h-[60svh]">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+                            <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700/50">
+                                <tr>
+                                    <th class="w-10 px-3 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No</th>
+                                    <th class="px-3 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Nama Dokter</th>
+                                    <th class="px-3 py-3 text-right font-semibold text-emerald-700 dark:text-emerald-400">Rawat Jalan</th>
+                                    <th class="px-3 py-3 text-right font-semibold text-orange-600 dark:text-orange-400">Rawat Inap</th>
+                                    <th class="px-3 py-3 text-right font-semibold text-blue-700 dark:text-blue-400">Total</th>
+                                    <th class="px-3 py-3 text-center font-semibold text-gray-700 dark:text-gray-300">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody class="animate-pulse divide-y divide-gray-200 dark:divide-gray-700">
+                                <tr v-for="i in 8" :key="i">
+                                    <td class="px-3 py-3"><div class="h-4 w-6 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-3 py-3"><div class="h-4 w-48 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-3 py-3 text-right"><div class="ml-auto h-4 w-12 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-3 py-3 text-right"><div class="ml-auto h-4 w-12 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-3 py-3 text-right"><div class="ml-auto h-4 w-12 rounded bg-gray-200 dark:bg-gray-700" /></td>
+                                    <td class="px-3 py-3 text-center"><div class="mx-auto h-7 w-16 rounded-lg bg-gray-200 dark:bg-gray-700" /></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </template>
 
-        <!-- Table -->
-        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-            <div class="overflow-auto max-h-[60svh]">
-                <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-                    <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700/50">
-                        <tr>
-                            <th class="w-10 px-3 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No</th>
-                            <th class="px-3 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Nama Dokter</th>
-                            <th class="px-3 py-3 text-right font-semibold text-emerald-700 dark:text-emerald-400">Rawat Jalan</th>
-                            <th class="px-3 py-3 text-right font-semibold text-orange-600 dark:text-orange-400">Rawat Inap</th>
-                            <th class="px-3 py-3 text-right font-semibold text-blue-700 dark:text-blue-400">Total</th>
-                            <th class="px-3 py-3 text-center font-semibold text-gray-700 dark:text-gray-300">Aksi</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                        <tr v-if="!props.items.length">
-                            <td colspan="6" class="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
-                                Tidak ada data.
-                            </td>
-                        </tr>
-                        <tr
-                            v-for="(row, idx) in props.items"
-                            :key="row.ParamedicID"
-                            class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
-                        >
-                            <td class="px-3 py-2.5 text-gray-500 dark:text-gray-400">
-                                {{ (pagination.currentPage - 1) * pagination.perPage + idx + 1 }}
-                            </td>
-                            <td class="px-3 py-2.5 font-medium text-gray-900 dark:text-gray-100">{{ row.ParamedicName }}</td>
-                            <td class="px-3 py-2.5 text-right tabular-nums text-emerald-700 dark:text-emerald-400">
-                                {{ Number(row.JumlahRJ).toLocaleString('id-ID') }}
-                            </td>
-                            <td class="px-3 py-2.5 text-right tabular-nums text-orange-600 dark:text-orange-400">
-                                {{ Number(row.JumlahRI).toLocaleString('id-ID') }}
-                            </td>
-                            <td class="px-3 py-2.5 text-right tabular-nums font-semibold text-blue-700 dark:text-blue-400">
-                                {{ Number(row.JumlahPasien).toLocaleString('id-ID') }}
-                            </td>
-                            <td class="px-3 py-2.5">
-                                <div class="flex items-center justify-center gap-1.5">
-                                    <button
-                                        title="Lihat detail per bulan"
-                                        class="inline-flex h-7 w-7 items-center justify-center rounded border border-indigo-200 bg-indigo-50 text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400"
-                                        @click="openDetail(row)"
-                                    >
-                                        <Eye :size="14" />
-                                    </button>
-                                    <a
-                                        :href="doctorExcelUrl(row)"
-                                        title="Download Excel"
-                                        class="inline-flex h-7 w-7 items-center justify-center rounded border border-emerald-200 bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400"
-                                    >
-                                        <Download :size="14" />
-                                    </a>
-                                </div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <!-- Pagination footer -->
-            <div
-                v-if="pagination.lastPage > 1"
-                class="flex items-center justify-between border-t border-gray-200 px-4 py-3 dark:border-gray-700"
-            >
+            <!-- Search bar -->
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center gap-2">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">Cari Dokter:</label>
+                    <div class="relative">
+                        <Search :size="14" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input
+                            v-model="searchInput"
+                            type="text"
+                            placeholder="Nama dokter..."
+                            class="h-9 w-60 rounded-lg border border-gray-200 bg-white pl-8 pr-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                            @input="onSearchInput"
+                            @keydown.enter.prevent="onSearchInput"
+                        />
+                    </div>
+                    <button
+                        v-if="searchInput"
+                        class="inline-flex h-9 items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm text-gray-500 hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-700"
+                        @click="clearSearch"
+                    >
+                        <X :size="14" />
+                        Reset
+                    </button>
+                </div>
                 <span class="text-xs text-gray-500 dark:text-gray-400">
-                    Hal {{ pagination.currentPage }} / {{ pagination.lastPage }}
-                    &nbsp;·&nbsp;
-                    {{ pagination.total.toLocaleString('id-ID') }} dokter
+                    {{ (tableData?.pagination.total ?? 0).toLocaleString('id-ID') }} dokter
                 </span>
-                <div class="flex items-center gap-1">
-                    <button
-                        :disabled="pagination.currentPage === 1"
-                        class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
-                        @click="goToPage(pagination.currentPage - 1)"
-                    >
-                        <ChevronLeft :size="14" />
-                    </button>
-                    <template v-for="p in pageNumbers" :key="p">
-                        <span v-if="p === '...'" class="px-0.5 text-xs text-gray-400">…</span>
+            </div>
+
+            <!-- Table -->
+            <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                <div class="overflow-auto max-h-[60svh]">
+                    <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+                        <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700/50">
+                            <tr>
+                                <th class="w-10 px-3 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">No</th>
+                                <th class="px-3 py-3 text-left font-semibold text-gray-700 dark:text-gray-300">Nama Dokter</th>
+                                <th class="px-3 py-3 text-right font-semibold text-emerald-700 dark:text-emerald-400">Rawat Jalan</th>
+                                <th class="px-3 py-3 text-right font-semibold text-orange-600 dark:text-orange-400">Rawat Inap</th>
+                                <th class="px-3 py-3 text-right font-semibold text-blue-700 dark:text-blue-400">Total</th>
+                                <th class="px-3 py-3 text-center font-semibold text-gray-700 dark:text-gray-300">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                            <tr v-if="!(tableData?.items?.length)">
+                                <td colspan="6" class="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
+                                    Tidak ada data.
+                                </td>
+                            </tr>
+                            <tr
+                                v-for="(row, idx) in tableData?.items ?? []"
+                                :key="row.ParamedicID"
+                                class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                            >
+                                <td class="px-3 py-2.5 text-gray-500 dark:text-gray-400">
+                                    {{ ((tableData?.pagination.currentPage ?? 1) - 1) * (tableData?.pagination.perPage ?? 10) + idx + 1 }}
+                                </td>
+                                <td class="px-3 py-2.5 font-medium text-gray-900 dark:text-gray-100">{{ row.ParamedicName }}</td>
+                                <td class="px-3 py-2.5 text-right tabular-nums text-emerald-700 dark:text-emerald-400">
+                                    {{ Number(row.JumlahRJ).toLocaleString('id-ID') }}
+                                </td>
+                                <td class="px-3 py-2.5 text-right tabular-nums text-orange-600 dark:text-orange-400">
+                                    {{ Number(row.JumlahRI).toLocaleString('id-ID') }}
+                                </td>
+                                <td class="px-3 py-2.5 text-right tabular-nums font-semibold text-blue-700 dark:text-blue-400">
+                                    {{ Number(row.JumlahPasien).toLocaleString('id-ID') }}
+                                </td>
+                                <td class="px-3 py-2.5">
+                                    <div class="flex items-center justify-center gap-1.5">
+                                        <button
+                                            title="Lihat detail per bulan"
+                                            class="inline-flex h-7 w-7 items-center justify-center rounded border border-indigo-200 bg-indigo-50 text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400"
+                                            @click="openDetail(row)"
+                                        >
+                                            <Eye :size="14" />
+                                        </button>
+                                        <a
+                                            :href="doctorExcelUrl(row)"
+                                            title="Download Excel"
+                                            class="inline-flex h-7 w-7 items-center justify-center rounded border border-emerald-200 bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400"
+                                        >
+                                            <Download :size="14" />
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination footer -->
+                <div
+                    v-if="(tableData?.pagination.lastPage ?? 1) > 1"
+                    class="flex items-center justify-between border-t border-gray-200 px-4 py-3 dark:border-gray-700"
+                >
+                    <span class="text-xs text-gray-500 dark:text-gray-400">
+                        Hal {{ tableData?.pagination.currentPage ?? 1 }} / {{ tableData?.pagination.lastPage ?? 1 }}
+                        &nbsp;·&nbsp;
+                        {{ (tableData?.pagination.total ?? 0).toLocaleString('id-ID') }} dokter
+                    </span>
+                    <div class="flex items-center gap-1">
                         <button
-                            v-else
-                            class="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded border px-1 text-xs transition-colors"
-                            :class="p === pagination.currentPage
-                                ? 'border-indigo-500 bg-indigo-500 text-white'
-                                : 'border-gray-200 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700'"
-                            @click="goToPage(p)"
+                            :disabled="(tableData?.pagination.currentPage ?? 1) === 1"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
+                            @click="goToPage((tableData?.pagination.currentPage ?? 1) - 1)"
                         >
-                            {{ p }}
+                            <ChevronLeft :size="14" />
                         </button>
-                    </template>
-                    <button
-                        :disabled="pagination.currentPage === pagination.lastPage"
-                        class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
-                        @click="goToPage(pagination.currentPage + 1)"
-                    >
-                        <ChevronRight :size="14" />
-                    </button>
+                        <template v-for="p in pageNumbers" :key="p">
+                            <span v-if="p === '...'" class="px-0.5 text-xs text-gray-400">…</span>
+                            <button
+                                v-else
+                                class="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded border px-1 text-xs transition-colors"
+                                :class="p === (tableData?.pagination.currentPage ?? 1)
+                                    ? 'border-indigo-500 bg-indigo-500 text-white'
+                                    : 'border-gray-200 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700'"
+                                @click="goToPage(p)"
+                            >
+                                {{ p }}
+                            </button>
+                        </template>
+                        <button
+                            :disabled="(tableData?.pagination.currentPage ?? 1) === (tableData?.pagination.lastPage ?? 1)"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
+                            @click="goToPage((tableData?.pagination.currentPage ?? 1) + 1)"
+                        >
+                            <ChevronRight :size="14" />
+                        </button>
+                    </div>
                 </div>
             </div>
-        </div>
+        </Deferred>
 
     </div>
 
